@@ -1,0 +1,255 @@
+import pandas as pd
+import yfinance as yf
+import requests
+import io
+import time
+import datetime
+import warnings
+import os # Added for file existence check
+
+# Suppress specific FutureWarning from yfinance/pandas if needed
+warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
+
+# --- Configuration ---
+holdings_url = "https://www.ishares.com/uk/individual/en/products/251393/ishares-msci-usa-islamic-ucits-etf/1506575576011.ajax?fileType=csv&fileName=ISUS_holdings&dataType=fund"
+fallback_holdings_file = 'ISUS_holdings.csv' # Local fallback file
+
+# !! IMPORTANT !!: Update with the LATEST shares outstanding for ISUS
+# Find this on the iShares website or reliable financial data source.
+# Using a placeholder - VERIFY THIS VALUE.
+total_isus_shares_outstanding = 3010000
+
+# --- 1. Attempt to Fetch/Load Holdings Data ---
+holdings_df = None
+source_used = None # To track if URL or fallback was used
+
+# Try fetching from URL first
+try:
+    print(f"Attempting to fetch latest holdings from iShares URL...")
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+    response = requests.get(holdings_url, headers=headers, timeout=30)
+    response.raise_for_status() # Check for HTTP errors
+
+    print("Holdings data downloaded successfully from URL.")
+    # Decode the content
+    try:
+        csv_content = response.content.decode('utf-8')
+    except UnicodeDecodeError:
+        csv_content = response.content.decode('latin-1')
+
+    # Split into lines and skip the first two lines
+    lines = csv_content.strip().splitlines()
+    if len(lines) > 2:
+        # Assume the 3rd line (index 2) is the header
+        csv_data_string = "\n".join(lines[2:])
+        # Read the processed string data using pandas
+        holdings_df = pd.read_csv(io.StringIO(csv_data_string))
+        source_used = "URL"
+        print("Parsed holdings data from URL.")
+    else:
+        print("Warning: Downloaded CSV from URL has fewer than 3 lines. Will try fallback.")
+        holdings_df = None # Ensure df is None to trigger fallback
+
+except requests.exceptions.RequestException as e:
+    print(f"Warning: Could not fetch holdings data from URL: {e}. Will try fallback.")
+    holdings_df = None
+except Exception as e:
+    print(f"Warning: Error processing data from URL: {e}. Will try fallback.")
+    holdings_df = None
+
+# Fallback to local file if URL fetch failed or resulted in invalid data
+if holdings_df is None:
+    print(f"\nAttempting to load holdings from local file: {fallback_holdings_file}")
+    if os.path.exists(fallback_holdings_file):
+        try:
+            holdings_df = pd.read_csv(fallback_holdings_file)
+            # **Important**: Assume local file *doesn't* need first 2 lines removed
+            # If your local file *also* has extra header lines, add processing here.
+            source_used = "Local File"
+            print(f"Successfully loaded holdings from {fallback_holdings_file}.")
+        except Exception as e:
+            print(f"FATAL ERROR: Failed to read fallback file '{fallback_holdings_file}': {e}")
+            exit()
+    else:
+        print(f"FATAL ERROR: Fallback file '{fallback_holdings_file}' not found and URL fetch failed.")
+        exit()
+
+# --- 2. Data Cleaning (Applied to whichever source was successful) ---
+try:
+    print("\nCleaning holdings data...")
+    # Apply cleaning logic (same as before)
+    cols_to_clean = ['Market Value', 'Weight (%)', 'Notional Value', 'Shares', 'Price']
+    for col in cols_to_clean:
+        if col in holdings_df.columns:
+            holdings_df[col] = holdings_df[col].astype(str).str.replace(',', '', regex=False)
+            if '%' in col:
+                 holdings_df[col] = holdings_df[col].str.replace('%', '', regex=False)
+            holdings_df[col] = pd.to_numeric(holdings_df[col], errors='coerce')
+
+    required_cols = ['Ticker', 'Shares', 'Market Currency', 'Asset Class', 'Market Value']
+    if not all(col in holdings_df.columns for col in required_cols):
+        raise ValueError(f"Loaded data source ('{source_used}') is missing required columns. Found: {holdings_df.columns.tolist()}")
+
+    holdings_df.dropna(subset=required_cols, inplace=True)
+    holdings_df['Shares'] = pd.to_numeric(holdings_df['Shares'], errors='coerce')
+    holdings_df.dropna(subset=['Shares'], inplace=True)
+    print("Holdings data cleaned.")
+
+except Exception as e:
+    print(f"FATAL ERROR during data cleaning (source: {source_used}): {e}")
+    exit()
+
+
+# --- 3. Identify Top 10 Equity Holdings ---
+# (This section remains unchanged)
+top_10_equities = []
+try:
+    holdings_df['Market Value'] = pd.to_numeric(holdings_df['Market Value'], errors='coerce')
+    equities_df = holdings_df[holdings_df['Asset Class'] == 'Equity'].copy()
+    if not equities_df.empty:
+         top_10_equities = equities_df.nlargest(10, 'Market Value')['Ticker'].tolist()
+         print(f"\nIdentified Top 10 Holdings (by initial Market Value): {top_10_equities}")
+    else:
+        print("Warning: No equity holdings found to determine top 10.")
+except Exception as e:
+    print(f"Warning: Could not determine top 10 holdings due to data issue: {e}")
+
+
+# --- 4. Fetch Current FX Rates ---
+# (This section remains unchanged)
+print("\nFetching current FX rates...")
+current_eur_usd_rate = None
+current_gbp_usd_rate = None
+try:
+    eur_usd_ticker = yf.Ticker("EURUSD=X")
+    eur_usd_info = eur_usd_ticker.history(period="1d")
+    if not eur_usd_info.empty:
+        current_eur_usd_rate = eur_usd_info['Close'].iloc[-1]
+        print(f"  Current EUR/USD rate: {current_eur_usd_rate:.4f}")
+    else:
+        print("  Warning: Could not fetch EUR/USD rate.")
+
+    gbp_usd_ticker = yf.Ticker("GBPUSD=X")
+    gbp_usd_info = gbp_usd_ticker.history(period="1d")
+    if not gbp_usd_info.empty:
+        current_gbp_usd_rate = gbp_usd_info['Close'].iloc[-1]
+        print(f"  Current GBP/USD rate: {current_gbp_usd_rate:.4f}")
+    else:
+        print("  Warning: Could not fetch GBP/USD rate.")
+except Exception as e:
+    print(f"  Warning: Error fetching FX rates: {e}")
+
+
+# --- 5. Fetch Current Prices and Calculate Total Asset Value ---
+# (This section remains unchanged)
+total_portfolio_value_usd = 0.0
+missing_prices = []
+processed_count = 0
+
+print("\nFetching current prices and calculating total value...")
+print("(Displaying details only for Top 10 equities)")
+
+# Market time check
+now_utc = datetime.datetime.now(datetime.timezone.utc)
+us_eastern_time = now_utc.astimezone(datetime.timezone(datetime.timedelta(hours=-4), name="EDT")) # Approx ET
+print(f"Current time: {us_eastern_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+if 9 <= us_eastern_time.hour < 16 and us_eastern_time.weekday() < 5 :
+    print("US Markets likely open - prices may be intra-day.")
+else:
+    print("US Markets likely closed - prices likely represent last closing price.")
+
+for index, row in holdings_df.iterrows():
+    ticker = row['Ticker']
+    shares = row['Shares']
+    currency = row['Market Currency']
+    asset_class = row['Asset Class']
+
+    current_price_usd = None
+    holding_value_usd = 0
+    print_details = ticker in top_10_equities
+
+    if asset_class == 'Equity':
+        if not print_details and processed_count % 25 == 0:
+             print(f"  Processing other holdings... ({processed_count+1}/{len(holdings_df)})")
+
+        try:
+            stock_ticker = yf.Ticker(ticker)
+            info = stock_ticker.info
+            current_price_usd = info.get('currentPrice') or info.get('regularMarketPrice')
+
+            if current_price_usd is None:
+                hist = stock_ticker.history(period="1d")
+                if not hist.empty:
+                    current_price_usd = hist['Close'].iloc[-1]
+
+            if current_price_usd is not None:
+                holding_value_usd = shares * current_price_usd
+                total_portfolio_value_usd += holding_value_usd
+                if print_details:
+                     print(f"  -> {ticker}: Shares: {shares:,.2f}, Price: {current_price_usd:.2f} USD, Value: {holding_value_usd:,.2f} USD")
+            else:
+                missing_prices.append(ticker)
+                if print_details:
+                     print(f"  -> Warning: Could not retrieve price for {ticker}")
+
+            time.sleep(0.2)
+
+        except Exception as e:
+            missing_prices.append(ticker)
+            if print_details:
+                print(f"  -> Error fetching price for {ticker}: {e}")
+
+    elif asset_class == 'Cash':
+        cash_amount = row['Market Value']
+        print(f"  Processing Cash: {cash_amount:,.2f} {currency}")
+        if currency == 'USD':
+            holding_value_usd = cash_amount
+            total_portfolio_value_usd += holding_value_usd
+        elif currency == 'EUR':
+            if current_eur_usd_rate is not None:
+                holding_value_usd = cash_amount * current_eur_usd_rate
+                total_portfolio_value_usd += holding_value_usd
+                print(f"    Converted Value: {holding_value_usd:,.2f} USD")
+            else:
+                print(f"    Warning: Cannot convert EUR cash, missing FX rate.")
+                missing_prices.append(f"{currency} Cash")
+        elif currency == 'GBP':
+            if current_gbp_usd_rate is not None:
+                holding_value_usd = cash_amount * current_gbp_usd_rate
+                total_portfolio_value_usd += holding_value_usd
+                print(f"    Converted Value: {holding_value_usd:,.2f} USD")
+            else:
+                print(f"    Warning: Cannot convert GBP cash, missing FX rate.")
+                missing_prices.append(f"{currency} Cash")
+        else:
+             print(f"    Warning: Unhandled cash currency {currency}")
+             missing_prices.append(f"{currency} Cash")
+
+    processed_count += 1
+
+
+# --- 6. Estimate NAV (Final Output Focus) ---
+# (This section remains unchanged)
+calculation_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S %Z')
+print(f"\n--- NAV Calculation Summary ({calculation_time}) ---")
+print(f"Holdings Data Source: {source_used}") # Indicate source used
+
+if missing_prices:
+    unique_missing = sorted(list(set(missing_prices)))
+    print(f"Warning: Could not determine current value for some holdings: {', '.join(unique_missing)}")
+
+if total_isus_shares_outstanding > 0:
+    estimated_nav_per_share_usd = total_portfolio_value_usd / total_isus_shares_outstanding
+    print(f"Total Shares Outstanding used: {total_isus_shares_outstanding:,}")
+    # --- FINAL RESULT ---
+    print(f"\nEstimated NAV per Share (USD): {estimated_nav_per_share_usd:.4f}\n")
+else:
+    print("\nError: Total shares outstanding is zero or invalid. Cannot calculate NAV per share.\n")
+
+print("Disclaimer:")
+print("- This NAV is an ESTIMATE based on fetched prices (possibly delayed/closing) from yfinance and specified shares outstanding.")
+print("- Holdings data attempted from iShares URL, with local file fallback.")
+print("- Fund liabilities (fees, etc.) are NOT included in this calculation.")
+print("- Always refer to the official NAV published by iShares/BlackRock for definitive values.")
