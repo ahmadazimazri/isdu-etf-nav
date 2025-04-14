@@ -66,13 +66,24 @@ jobs:
             echo "nav_value=" >> $GITHUB_OUTPUT # Set empty output
           fi
 
-      # # Step 6: Use Captured NAV (Example)
-      # # This step only runs if a valid NAV value was captured
-      # - name: Display Captured NAV
-      #   # Added quotes around the condition as a potential fix for parsing issues
-      #   if: steps.capture_nav.outputs.nav_value != ''
-      #   run: echo "Captured Estimated NAV from file: ${{ steps.capture_nav.outputs.nav_value }}"
+      # Step 6: Add NAV to Job Summary (if successful)
+      # This step writes Markdown content to the Job Summary page
+      - name: Add NAV to Job Summary
+        # Run only if the previous step successfully captured a non-error value
+        if: steps.capture_nav.outputs.nav_value != '' && steps.capture_nav.outputs.nav_value != 'ERROR'
+        run: |
+          echo "### Estimated ISUS NAV (USD)" >> $GITHUB_STEP_SUMMARY
+          echo "**${{ steps.capture_nav.outputs.nav_value }}**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY # Add a blank line
+          echo "_Note: This is an estimate based on fetched prices as of workflow execution time and may differ from the official NAV._" >> $GITHUB_STEP_SUMMARY
 
-      # # Add other steps here to *use* the captured NAV if needed
-      # # (e.g., commit to repo, send notification)
+      # Step 7: Report NAV Error in Job Summary (if failed)
+      - name: Report NAV Error in Job Summary
+        # Run only if the previous step resulted in an empty or ERROR value
+        if: steps.capture_nav.outputs.nav_value == '' || steps.capture_nav.outputs.nav_value == 'ERROR'
+        run: |
+          echo "### Estimated ISUS NAV (USD)" >> $GITHUB_STEP_SUMMARY
+          echo "**Could not be determined.**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_Check workflow logs for details._" >> $GITHUB_STEP_SUMMARY
 
