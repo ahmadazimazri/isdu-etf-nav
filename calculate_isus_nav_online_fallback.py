@@ -5,14 +5,15 @@ import io
 import time
 import datetime
 import warnings
-import os # Added for file existence check
+import os # For checking fallback file existence
 
 # Suppress specific FutureWarning from yfinance/pandas if needed
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 
 # --- Configuration ---
 holdings_url = "https://www.ishares.com/uk/individual/en/products/251393/ishares-msci-usa-islamic-ucits-etf/1506575576011.ajax?fileType=csv&fileName=ISUS_holdings&dataType=fund"
-fallback_holdings_file = 'ISUS_holdings.csv' # Local fallback file
+fallback_holdings_file = 'ISUS_holdings.csv' # Local fallback file name
+result_file = "nav_result.txt" # File to save the final NAV result
 
 # !! IMPORTANT !!: Update with the LATEST shares outstanding for ISUS
 # Find this on the iShares website or reliable financial data source.
@@ -37,12 +38,14 @@ try:
     try:
         csv_content = response.content.decode('utf-8')
     except UnicodeDecodeError:
+        print("UTF-8 decode failed, trying latin-1...")
         csv_content = response.content.decode('latin-1')
 
     # Split into lines and skip the first two lines
     lines = csv_content.strip().splitlines()
+
     if len(lines) > 2:
-        # Assume the 3rd line (index 2) is the header
+        # Assume the 3rd line (index 2) is the header row for pandas
         csv_data_string = "\n".join(lines[2:])
         # Read the processed string data using pandas
         holdings_df = pd.read_csv(io.StringIO(csv_data_string))
@@ -71,15 +74,15 @@ if holdings_df is None:
             print(f"Successfully loaded holdings from {fallback_holdings_file}.")
         except Exception as e:
             print(f"FATAL ERROR: Failed to read fallback file '{fallback_holdings_file}': {e}")
-            exit()
+            exit(1) # Exit with non-zero code on fatal error
     else:
         print(f"FATAL ERROR: Fallback file '{fallback_holdings_file}' not found and URL fetch failed.")
-        exit()
+        exit(1) # Exit with non-zero code on fatal error
 
 # --- 2. Data Cleaning (Applied to whichever source was successful) ---
 try:
     print("\nCleaning holdings data...")
-    # Apply cleaning logic (same as before)
+    # Apply cleaning logic
     cols_to_clean = ['Market Value', 'Weight (%)', 'Notional Value', 'Shares', 'Price']
     for col in cols_to_clean:
         if col in holdings_df.columns:
@@ -99,13 +102,13 @@ try:
 
 except Exception as e:
     print(f"FATAL ERROR during data cleaning (source: {source_used}): {e}")
-    exit()
+    exit(1)
 
 
 # --- 3. Identify Top 10 Equity Holdings ---
-# (This section remains unchanged)
 top_10_equities = []
 try:
+    # Ensure Market Value is numeric before sorting
     holdings_df['Market Value'] = pd.to_numeric(holdings_df['Market Value'], errors='coerce')
     equities_df = holdings_df[holdings_df['Asset Class'] == 'Equity'].copy()
     if not equities_df.empty:
@@ -118,11 +121,11 @@ except Exception as e:
 
 
 # --- 4. Fetch Current FX Rates ---
-# (This section remains unchanged)
 print("\nFetching current FX rates...")
 current_eur_usd_rate = None
 current_gbp_usd_rate = None
 try:
+    # Fetch EUR to USD rate
     eur_usd_ticker = yf.Ticker("EURUSD=X")
     eur_usd_info = eur_usd_ticker.history(period="1d")
     if not eur_usd_info.empty:
@@ -130,7 +133,9 @@ try:
         print(f"  Current EUR/USD rate: {current_eur_usd_rate:.4f}")
     else:
         print("  Warning: Could not fetch EUR/USD rate.")
+    time.sleep(0.2) # Small delay
 
+    # Fetch GBP to USD rate
     gbp_usd_ticker = yf.Ticker("GBPUSD=X")
     gbp_usd_info = gbp_usd_ticker.history(period="1d")
     if not gbp_usd_info.empty:
@@ -143,7 +148,6 @@ except Exception as e:
 
 
 # --- 5. Fetch Current Prices and Calculate Total Asset Value ---
-# (This section remains unchanged)
 total_portfolio_value_usd = 0.0
 missing_prices = []
 processed_count = 0
@@ -159,6 +163,7 @@ if 9 <= us_eastern_time.hour < 16 and us_eastern_time.weekday() < 5 :
     print("US Markets likely open - prices may be intra-day.")
 else:
     print("US Markets likely closed - prices likely represent last closing price.")
+
 
 for index, row in holdings_df.iterrows():
     ticker = row['Ticker']
@@ -177,9 +182,10 @@ for index, row in holdings_df.iterrows():
         try:
             stock_ticker = yf.Ticker(ticker)
             info = stock_ticker.info
+            # Prefer more 'live' prices if available
             current_price_usd = info.get('currentPrice') or info.get('regularMarketPrice')
 
-            if current_price_usd is None:
+            if current_price_usd is None: # Fallback to previous close
                 hist = stock_ticker.history(period="1d")
                 if not hist.empty:
                     current_price_usd = hist['Close'].iloc[-1]
@@ -194,7 +200,7 @@ for index, row in holdings_df.iterrows():
                 if print_details:
                      print(f"  -> Warning: Could not retrieve price for {ticker}")
 
-            time.sleep(0.2)
+            time.sleep(0.2) # Pause briefly
 
         except Exception as e:
             missing_prices.append(ticker)
@@ -202,14 +208,14 @@ for index, row in holdings_df.iterrows():
                 print(f"  -> Error fetching price for {ticker}: {e}")
 
     elif asset_class == 'Cash':
-        cash_amount = row['Market Value']
+        cash_amount = row['Market Value'] # Using Market Value col for cash amount
         print(f"  Processing Cash: {cash_amount:,.2f} {currency}")
         if currency == 'USD':
             holding_value_usd = cash_amount
             total_portfolio_value_usd += holding_value_usd
         elif currency == 'EUR':
             if current_eur_usd_rate is not None:
-                holding_value_usd = cash_amount * current_eur_usd_rate
+                holding_value_usd = cash_amount * current_eur_usd_rate # Multiply EUR amount by EUR->USD rate
                 total_portfolio_value_usd += holding_value_usd
                 print(f"    Converted Value: {holding_value_usd:,.2f} USD")
             else:
@@ -217,7 +223,7 @@ for index, row in holdings_df.iterrows():
                 missing_prices.append(f"{currency} Cash")
         elif currency == 'GBP':
             if current_gbp_usd_rate is not None:
-                holding_value_usd = cash_amount * current_gbp_usd_rate
+                holding_value_usd = cash_amount * current_gbp_usd_rate # Multiply GBP amount by GBP->USD rate
                 total_portfolio_value_usd += holding_value_usd
                 print(f"    Converted Value: {holding_value_usd:,.2f} USD")
             else:
@@ -230,11 +236,12 @@ for index, row in holdings_df.iterrows():
     processed_count += 1
 
 
-# --- 6. Estimate NAV (Final Output Focus) ---
-# (This section remains unchanged)
+# --- 6. Estimate NAV & Save Result ---
 calculation_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S %Z')
 print(f"\n--- NAV Calculation Summary ({calculation_time}) ---")
 print(f"Holdings Data Source: {source_used}") # Indicate source used
+
+estimated_nav_per_share_usd = None # Initialize variable
 
 if missing_prices:
     unique_missing = sorted(list(set(missing_prices)))
@@ -248,8 +255,26 @@ if total_isus_shares_outstanding > 0:
 else:
     print("\nError: Total shares outstanding is zero or invalid. Cannot calculate NAV per share.\n")
 
-print("Disclaimer:")
+# --- Save result to file ---
+try:
+    with open(result_file, "w") as f:
+        if estimated_nav_per_share_usd is not None:
+            f.write(f"{estimated_nav_per_share_usd:.4f}")
+        else:
+            f.write("ERROR") # Write error indicator if NAV couldn't be calculated
+    print(f"Calculation result saved to {result_file}")
+except IOError as e:
+    print(f"Warning: Could not write NAV result to file '{result_file}': {e}")
+
+
+print("\nDisclaimer:")
 print("- This NAV is an ESTIMATE based on fetched prices (possibly delayed/closing) from yfinance and specified shares outstanding.")
 print("- Holdings data attempted from iShares URL, with local file fallback.")
 print("- Fund liabilities (fees, etc.) are NOT included in this calculation.")
 print("- Always refer to the official NAV published by iShares/BlackRock for definitive values.")
+
+# Optional: Exit with non-zero code if prices were missing, useful for CI/CD
+if missing_prices:
+    print("\nExiting with status code 1 due to missing price data.")
+    exit(1)
+
