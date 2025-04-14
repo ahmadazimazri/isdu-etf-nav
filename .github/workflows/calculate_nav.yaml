@@ -1,0 +1,77 @@
+name: Calculate ISUS NAV Estimate
+
+on:
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+  # Runs on a schedule (adjust cron timing as needed)
+  schedule:
+    # Example: Runs daily at 21:05 UTC (5:05 PM ET, after US market close / 5:05 AM MYT next day)
+    # Cron syntax: minute hour day(month) month day(week)
+    - cron: '05 21 * * *'
+
+jobs:
+  calculate-nav:
+    runs-on: ubuntu-latest # Use the latest available Ubuntu runner
+
+    steps:
+      # Step 1: Check out your repository code
+      # This makes your script and fallback CSV available
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Python environment
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip' # Enable dependency caching
+
+      # Step 3: Install Python dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Check if requirements.txt exists and install from it
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            echo "requirements.txt not found, installing packages individually."
+            pip install pandas yfinance requests
+          fi
+
+      # Step 4: Run the NAV Calculation Script
+      # The script now saves its result to nav_result.txt
+      - name: Run NAV Calculation Script
+        id: nav_calculation
+        run: python calculate_isus_nav_online_fallback.py
+
+      # Step 5: Capture NAV Output from File
+      # Reads the result saved by the previous step
+      - name: Capture NAV Output from File
+        id: capture_nav
+        run: |
+          if [ -f nav_result.txt ]; then
+            nav_value=$(cat nav_result.txt)
+            echo "Read NAV value from file: ${nav_value}"
+            # Check if the script wrote an error indicator
+            if [[ "$nav_value" == "ERROR" ]]; then
+               echo "NAV calculation script indicated an error."
+               # Optionally fail the workflow here if needed: exit 1
+               echo "nav_value=" >> $GITHUB_OUTPUT # Set empty output
+            else
+               echo "nav_value=${nav_value}" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "Warning: nav_result.txt not found."
+            echo "nav_value=" >> $GITHUB_OUTPUT # Set empty output
+          fi
+
+      # Step 6: Use Captured NAV (Example)
+      # This step only runs if a valid NAV value was captured
+      - name: Display Captured NAV
+        if: steps.capture_nav.outputs.nav_value != ''
+        run: echo "Captured Estimated NAV from file: ${{ steps.capture_nav.outputs.nav_value }}"
+
+      # Add other steps here to *use* the captured NAV if needed
+      # (e.g., commit to repo, send notification)
+
