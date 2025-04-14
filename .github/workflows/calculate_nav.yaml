@@ -8,7 +8,7 @@ on:
   schedule:
     # Example: Runs daily at 21:05 UTC (5:05 PM ET, after US market close / 5:05 AM MYT next day)
     # Cron syntax: minute hour day(month) month day(week)
-    - cron: '05 21 * * *'
+    - cron: '05 21 * * 1-5'
 
 jobs:
   calculate-nav:
