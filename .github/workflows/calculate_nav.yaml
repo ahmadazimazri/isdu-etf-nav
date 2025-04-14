@@ -69,7 +69,8 @@ jobs:
       # Step 6: Use Captured NAV (Example)
       # This step only runs if a valid NAV value was captured
       - name: Display Captured NAV
-        if: steps.capture_nav.outputs.nav_value != ''
+        # Added quotes around the condition as a potential fix for parsing issues
+        if: "steps.capture_nav.outputs.nav_value != ''"
         run: echo "Captured Estimated NAV from file: ${{ steps.capture_nav.outputs.nav_value }}"
 
       # Add other steps here to *use* the captured NAV if needed
