@@ -14,8 +14,8 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 
 # --- Configuration ---
 # ** IMPORTANT: Update this filename if you saved the XLSX with a different name **
-holdings_excel_file = 'iShares-MSCI-USA-Islamic-UCITS-ETF-USD-Dist_fund.xlsx' # Input Excel file (.xlsx format)
-holdings_sheet_name = 'Holdings' # Sheet name (assuming it's still 'holdings')
+holdings_excel_file = 'ISUS_holdings.xlsx' # Input Excel file (.xlsx format)
+holdings_sheet_name = 'holdings' # Sheet name (assuming it's still 'holdings')
 header_row_index = 7 # Header starts at row 8 (0-indexed, assuming same as before)
 shares_outstanding_cell_row = 5 # Cell C6 -> row index 5 (assuming same)
 shares_outstanding_cell_col = 2 # Cell C6 -> col index 2 (assuming same)
@@ -41,53 +41,56 @@ if not os.path.exists(holdings_excel_file):
     sys.exit(1)
 
 try:
-    # --- Read Shares Outstanding from Cell C6 ---
-    # Use 'openpyxl' engine for .xlsx files
-    shares_df = pd.read_excel(
+    # --- Read Shares Outstanding from Cell C6 (Revised Method) ---
+    print("Reading Shares Outstanding value...")
+    # Read the first 3 columns (A:C) of the target row (row 6 / index 5)
+    shares_row_df = pd.read_excel(
         holdings_excel_file,
-        engine='openpyxl', # Use openpyxl for .xlsx
+        engine='openpyxl',
         sheet_name=holdings_sheet_name,
-        header=None, # Treat file as having no header for this read
-        usecols=[shares_outstanding_cell_col], # Read only column C (index 2)
-        skiprows=shares_outstanding_cell_row, # Skip rows to get to row 6 (index 5)
-        nrows=1 # Read only one row
+        header=None, # Read without assuming headers for this specific read
+        usecols="A:C", # Read columns A, B, C (indices 0, 1, 2)
+        skiprows=shares_outstanding_cell_row, # Skip rows 0-4 to get to row 6
+        nrows=1 # Read only this one row
     )
 
-    if not shares_df.empty:
-        # Extract the value from the first (and only) cell
-        shares_val = shares_df.iloc[0, 0]
-        # Clean the value (remove commas, convert to number)
+    # Check if the read was successful and has enough columns
+    if not shares_row_df.empty and shares_row_df.shape[1] > shares_outstanding_cell_col:
+        # Access the value using iloc[row_index, col_index]
+        # Since we read only 1 row, row_index is 0. Target col_index is 2 (C).
+        shares_val = shares_row_df.iloc[0, shares_outstanding_cell_col]
+
+        # Clean the extracted value (remove commas, convert to number)
         if isinstance(shares_val, (int, float)):
              total_isus_shares_outstanding = float(shares_val)
         elif isinstance(shares_val, str):
-             # Attempt to remove commas before converting
              cleaned_shares_val = shares_val.replace(',', '')
-             if cleaned_shares_val.replace('.', '', 1).isdigit(): # Check if it looks numeric
+             if cleaned_shares_val.replace('.', '', 1).isdigit():
                  total_isus_shares_outstanding = float(cleaned_shares_val)
              else:
-                 raise ValueError(f"Non-numeric string found in cell C6: {shares_val}")
+                 raise ValueError(f"Non-numeric string found in cell C6: '{shares_val}'")
         else:
-            # Handle cases where cell might be empty or unexpected type
              if pd.isna(shares_val):
                  raise ValueError("Cell C6 (Shares Outstanding) is empty or NaN.")
              else:
                  raise ValueError(f"Unexpected data type in cell C6: {type(shares_val)}")
         print(f"Successfully read Shares Outstanding: {total_isus_shares_outstanding:,.0f}")
     else:
-        raise ValueError("Could not read Shares Outstanding value from cell C6 (empty DataFrame returned).")
+        # Raise error if reading failed or didn't return enough columns
+        raise ValueError(f"Could not read cell C6 (Row index {shares_outstanding_cell_row}, Col index {shares_outstanding_cell_col}). DataFrame shape: {shares_row_df.shape}")
 
     # --- Read Holdings Table ---
+    print(f"Reading holdings table from sheet '{holdings_sheet_name}'...")
     # Headers start at row 8 (index 7)
     holdings_df = pd.read_excel(
         holdings_excel_file,
-        engine='openpyxl', # Use openpyxl for .xlsx
+        engine='openpyxl',
         sheet_name=holdings_sheet_name,
         header=header_row_index
     )
-    print(f"Successfully read holdings table from sheet '{holdings_sheet_name}'.")
+    print(f"Successfully read holdings table.")
 
 except ImportError:
-     # This error is less likely now if requirements are installed correctly
      print("FATAL ERROR: 'openpyxl' library not found. Please install it (pip install openpyxl) and add to requirements.txt")
      write_status_file(result_file, "ERROR")
      sys.exit(1)
@@ -96,7 +99,6 @@ except ValueError as e:
     write_status_file(result_file, "ERROR")
     sys.exit(1)
 except Exception as e:
-    # Catch other potential errors like file corruption, incorrect sheet name etc.
     print(f"FATAL ERROR reading Excel file '{holdings_excel_file}': {e}")
     write_status_file(result_file, "ERROR")
     sys.exit(1)
