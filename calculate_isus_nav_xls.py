@@ -13,7 +13,7 @@ import sys # To exit script
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 
 # --- Configuration ---
-holdings_excel_file = 'iShares-MSCI-USA-Islamic-UCITS-ETF-USD-Dist_fund.xls' # Input Excel file
+holdings_excel_file = 'iShares-MSCI-USA-Islamic-UCITS-ETF-USD-Dist_fund.xlsx' # Input Excel file
 holdings_sheet_name = 'holdings' # Sheet name provided by user
 header_row_index = 7 # Header starts at row 8 (0-indexed)
 shares_outstanding_cell_row = 5 # Cell C6 -> row index 5
