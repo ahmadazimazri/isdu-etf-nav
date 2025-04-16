@@ -1,5 +1,5 @@
 pandas
 yfinance
 requests
-xlrd
-openpyxl
+beautifulsoup4
+lxml
