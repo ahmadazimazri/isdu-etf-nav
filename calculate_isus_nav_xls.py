@@ -13,11 +13,12 @@ import sys # To exit script
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 
 # --- Configuration ---
-holdings_excel_file = 'iShares-MSCI-USA-Islamic-UCITS-ETF-USD-Dist_fund.xlsx' # Input Excel file
-holdings_sheet_name = 'holdings' # Sheet name provided by user
-header_row_index = 7 # Header starts at row 8 (0-indexed)
-shares_outstanding_cell_row = 5 # Cell C6 -> row index 5
-shares_outstanding_cell_col = 2 # Cell C6 -> col index 2
+# ** IMPORTANT: Update this filename if you saved the XLSX with a different name **
+holdings_excel_file = 'iShares-MSCI-USA-Islamic-UCITS-ETF-USD-Dist_fund.xlsx' # Input Excel file (.xlsx format)
+holdings_sheet_name = 'holdings' # Sheet name (assuming it's still 'holdings')
+header_row_index = 7 # Header starts at row 8 (0-indexed, assuming same as before)
+shares_outstanding_cell_row = 5 # Cell C6 -> row index 5 (assuming same)
+shares_outstanding_cell_col = 2 # Cell C6 -> col index 2 (assuming same)
 
 result_file = "nav_result.txt" # File to save the final NAV result
 
@@ -41,10 +42,10 @@ if not os.path.exists(holdings_excel_file):
 
 try:
     # --- Read Shares Outstanding from Cell C6 ---
-    # Read only the specific cell range without headers
+    # Use 'openpyxl' engine for .xlsx files
     shares_df = pd.read_excel(
         holdings_excel_file,
-        engine='xlrd',
+        engine='openpyxl', # Use openpyxl for .xlsx
         sheet_name=holdings_sheet_name,
         header=None, # Treat file as having no header for this read
         usecols=[shares_outstanding_cell_col], # Read only column C (index 2)
@@ -59,25 +60,35 @@ try:
         if isinstance(shares_val, (int, float)):
              total_isus_shares_outstanding = float(shares_val)
         elif isinstance(shares_val, str):
-             total_isus_shares_outstanding = float(shares_val.replace(',', ''))
+             # Attempt to remove commas before converting
+             cleaned_shares_val = shares_val.replace(',', '')
+             if cleaned_shares_val.replace('.', '', 1).isdigit(): # Check if it looks numeric
+                 total_isus_shares_outstanding = float(cleaned_shares_val)
+             else:
+                 raise ValueError(f"Non-numeric string found in cell C6: {shares_val}")
         else:
-            raise ValueError(f"Unexpected data type in cell C6: {type(shares_val)}")
+            # Handle cases where cell might be empty or unexpected type
+             if pd.isna(shares_val):
+                 raise ValueError("Cell C6 (Shares Outstanding) is empty or NaN.")
+             else:
+                 raise ValueError(f"Unexpected data type in cell C6: {type(shares_val)}")
         print(f"Successfully read Shares Outstanding: {total_isus_shares_outstanding:,.0f}")
     else:
-        raise ValueError("Could not read Shares Outstanding value from cell C6.")
+        raise ValueError("Could not read Shares Outstanding value from cell C6 (empty DataFrame returned).")
 
     # --- Read Holdings Table ---
     # Headers start at row 8 (index 7)
     holdings_df = pd.read_excel(
         holdings_excel_file,
-        engine='xlrd',
+        engine='openpyxl', # Use openpyxl for .xlsx
         sheet_name=holdings_sheet_name,
         header=header_row_index
     )
     print(f"Successfully read holdings table from sheet '{holdings_sheet_name}'.")
 
 except ImportError:
-     print("FATAL ERROR: 'xlrd' library not found. Please install it (pip install xlrd) and add to requirements.txt")
+     # This error is less likely now if requirements are installed correctly
+     print("FATAL ERROR: 'openpyxl' library not found. Please install it (pip install openpyxl) and add to requirements.txt")
      write_status_file(result_file, "ERROR")
      sys.exit(1)
 except ValueError as e:
@@ -85,37 +96,33 @@ except ValueError as e:
     write_status_file(result_file, "ERROR")
     sys.exit(1)
 except Exception as e:
+    # Catch other potential errors like file corruption, incorrect sheet name etc.
     print(f"FATAL ERROR reading Excel file '{holdings_excel_file}': {e}")
     write_status_file(result_file, "ERROR")
     sys.exit(1)
 
 
 # --- 2. Data Cleaning (Applied to holdings dataframe) ---
+# (Cleaning logic remains the same as before)
 try:
     print("\nCleaning holdings data...")
-    # Check for expected columns (adjust names if different in Excel)
     required_cols = ['Ticker', 'Shares', 'Market Currency', 'Asset Class', 'Market Value']
     if not all(col in holdings_df.columns for col in required_cols):
         print(f"Warning: Missing one or more expected columns: {required_cols}.")
         print(f"Available columns: {holdings_df.columns.tolist()}")
         print("Attempting to proceed, but calculations might fail.")
-        # Handle potential missing columns gracefully if possible, or raise error
 
-    # Clean numeric columns if they exist
     cols_to_clean = ['Market Value', 'Weight (%)', 'Notional Value', 'Shares', 'Price']
     for col in cols_to_clean:
         if col in holdings_df.columns:
-            # Convert to string first to handle mixed types before replace
-            holdings_df[col] = holdings_df[col].astype(str)
-            holdings_df[col] = holdings_df[col].str.replace(',', '', regex=False)
+            holdings_df[col] = holdings_df[col].astype(str).str.replace(',', '', regex=False)
             if '%' in col:
                  holdings_df[col] = holdings_df[col].str.replace('%', '', regex=False)
             holdings_df[col] = pd.to_numeric(holdings_df[col], errors='coerce')
 
-    # Ensure essential columns are present and clean after potential errors
     holdings_df.dropna(subset=['Ticker', 'Shares', 'Market Currency', 'Asset Class'], inplace=True)
     holdings_df['Shares'] = pd.to_numeric(holdings_df['Shares'], errors='coerce')
-    holdings_df.dropna(subset=['Shares'], inplace=True) # Drop if shares couldn't be converted
+    holdings_df.dropna(subset=['Shares'], inplace=True)
     print("Holdings data cleaned.")
 
 except Exception as e:
@@ -125,7 +132,7 @@ except Exception as e:
 
 
 # --- 3. Identify Top 10 Equity Holdings ---
-# (Remains the same, uses 'Market Value' column if available and clean)
+# (Logic remains the same)
 top_10_equities = []
 try:
     if 'Market Value' in holdings_df.columns:
@@ -143,7 +150,7 @@ except Exception as e:
 
 
 # --- 4. Fetch Current FX Rates ---
-# (Remains the same)
+# (Logic remains the same)
 print("\nFetching current FX rates...")
 current_eur_usd_rate = None
 current_gbp_usd_rate = None
@@ -169,7 +176,7 @@ except Exception as e:
 
 
 # --- 5. Fetch Current Prices and Calculate Total Asset Value ---
-# (Remains the same, iterates through cleaned holdings_df)
+# (Logic remains the same)
 total_portfolio_value_usd = 0.0
 missing_prices = []
 processed_count = 0
@@ -183,12 +190,11 @@ print(f"Current time: {us_eastern_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 # ... (market open/closed logic remains same) ...
 
 for index, row in holdings_df.iterrows():
-    ticker = row.get('Ticker', 'N/A') # Use .get for safety
+    ticker = row.get('Ticker', 'N/A')
     shares = row.get('Shares')
     currency = row.get('Market Currency', 'N/A')
     asset_class = row.get('Asset Class', 'N/A')
 
-    # Skip if essential data missing after cleaning
     if pd.isna(shares) or ticker == 'N/A' or currency == 'N/A' or asset_class == 'N/A':
         continue
 
@@ -200,7 +206,6 @@ for index, row in holdings_df.iterrows():
         if not print_details and processed_count % 25 == 0:
              print(f"  Processing other holdings... ({processed_count+1}/{len(holdings_df)})")
         try:
-            # Skip fetching if ticker looks invalid (e.g., from footer rows)
             if not isinstance(ticker, str) or len(ticker) > 10 or ' ' in ticker:
                  print(f"  Skipping invalid ticker: {ticker}")
                  continue
@@ -229,8 +234,6 @@ for index, row in holdings_df.iterrows():
                 print(f"  -> Error fetching price for {ticker}: {e}")
 
     elif asset_class == 'Cash':
-         # Use 'Market Value' if available for cash amount, otherwise maybe 'Shares'? Check Excel file.
-         # Assuming 'Market Value' column holds the cash amount here.
         cash_amount = row.get('Market Value')
         if pd.isna(cash_amount):
             print(f"  Warning: Missing 'Market Value' for Cash row with currency {currency}. Skipping.")
@@ -263,7 +266,7 @@ for index, row in holdings_df.iterrows():
 
 
 # --- 6. Estimate NAV & Save Result ---
-# (Remains mostly the same, but uses extracted shares outstanding)
+# (Logic remains the same)
 calculation_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S %Z')
 print(f"\n--- NAV Calculation Summary ({calculation_time}) ---")
 print(f"Holdings Data Source: Excel File ('{holdings_excel_file}')")
@@ -275,14 +278,12 @@ if missing_prices:
     unique_missing = sorted(list(set(missing_prices)))
     print(f"Warning: Could not determine current value for some holdings: {', '.join(unique_missing)}")
 
-# Check if shares outstanding was successfully read
 if total_isus_shares_outstanding is None or total_isus_shares_outstanding <= 0:
      print("\nError: Invalid or missing Shares Outstanding value from Excel. Cannot calculate NAV per share.\n")
 else:
     print(f"Total Shares Outstanding used (from Excel C6): {total_isus_shares_outstanding:,.0f}")
     estimated_nav_per_share_usd = total_portfolio_value_usd / total_isus_shares_outstanding
     print(f"\nEstimated NAV per Share (USD): {estimated_nav_per_share_usd:.4f}\n")
-    # Set status to the calculated value only if prices weren't missing
     if not missing_prices:
          final_result_status = f"{estimated_nav_per_share_usd:.4f}"
 
