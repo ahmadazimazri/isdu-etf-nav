@@ -1,8 +1,9 @@
 import pandas as pd
 import yfinance as yf
 import requests
-from bs4 import BeautifulSoup # For parsing HTML
-import re # For finding text pattern (less needed now but keep import)
+from bs4 import BeautifulSoup # Reverted back to BeautifulSoup
+# import lxml.html # No longer needed directly, but lxml parser is recommended for BS4
+import re
 import io
 import time
 import datetime
@@ -16,6 +17,9 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 # --- Configuration ---
 # URL for the main product page to scrape Shares Outstanding
 product_page_url = "https://www.ishares.com/uk/individual/en/products/251393/ishares-msci-usa-islamic-ucits-etf"
+# CSS Selector provided by user to find the Shares Outstanding value element
+shares_outstanding_selector = "#keyFundFacts > div > div.float-left.in-right > div.product-data-item.col-sharesOutstanding > div.data" # User provided CSS selector
+
 # URL for the downloadable holdings CSV
 holdings_url = "https://www.ishares.com/uk/individual/en/products/251393/ishares-msci-usa-islamic-ucits-etf/1506575576011.ajax?fileType=csv&fileName=ISUS_holdings&dataType=fund"
 # Local fallback CSV file
@@ -37,47 +41,47 @@ def write_status_file(filename, content):
     except IOError as e:
         print(f"Warning: Could not write status to file '{filename}': {e}")
 
-# --- 1. Scrape Shares Outstanding from Product Page ---
+# --- 1. Scrape Shares Outstanding from Product Page using CSS Selector ---
 total_isus_shares_outstanding = None
-print(f"Attempting to scrape Shares Outstanding from {product_page_url}...")
+print(f"Attempting to scrape Shares Outstanding from {product_page_url} using CSS selector...")
 try:
     response = requests.get(product_page_url, headers=REQUEST_HEADERS, timeout=30)
     response.raise_for_status()
-    soup = BeautifulSoup(response.content, 'lxml') # Use lxml parser
+
+    # Parse HTML content using BeautifulSoup with lxml parser
+    soup = BeautifulSoup(response.content, 'lxml')
 
     # --- !!! Selector Fragility Warning !!! ---
-    # Using selectors based on the HTML snippet provided by the user.
-    # This can STILL BREAK if iShares changes their website HTML/CSS classes.
+    # Using the CSS Selector provided by the user.
+    # This can STILL BREAK if iShares changes their website HTML/CSS.
 
-    # Find the container div using its specific classes
-    container_div = soup.find('div', class_='col-sharesOutstanding') # Find the div with this class
+    # Find the specific element using the CSS selector
+    value_element = soup.select_one(shares_outstanding_selector)
 
-    if container_div:
-        # Find the 'data' div within the container
-        value_div = container_div.find('div', class_='data')
-        if value_div:
-            shares_text = value_div.get_text(strip=True).replace(',', '')
-            # Check if the extracted text consists only of digits
-            if shares_text.isdigit():
-                total_isus_shares_outstanding = float(shares_text)
-                print(f"Successfully scraped Shares Outstanding: {total_isus_shares_outstanding:,.0f}")
-            else:
-                print(f"Warning: Found 'data' div for Shares Outstanding, but content is not purely numeric: '{shares_text}'")
+    if value_element:
+        # Element found, get its text content
+        shares_text = value_element.get_text(strip=True).replace(',', '')
+
+        # Check if the extracted text consists only of digits
+        if shares_text.isdigit():
+            total_isus_shares_outstanding = float(shares_text)
+            print(f"Successfully scraped Shares Outstanding using CSS selector: {total_isus_shares_outstanding:,.0f}")
         else:
-            print("Warning: Found 'col-sharesOutstanding' container, but couldn't find the 'data' div inside.")
+            print(f"Warning: Found element using CSS selector, but content is not purely numeric: '{shares_text}'")
     else:
-        print("Warning: Could not find the container div with class 'col-sharesOutstanding'. Website structure may have changed.")
+        print(f"Warning: Could not find element using the provided CSS selector: '{shares_outstanding_selector}'. Website structure may have changed.")
 
     # Raise error if scraping failed
     if total_isus_shares_outstanding is None:
-         raise ValueError("Failed to find or parse Shares Outstanding value from webpage using specific selectors.")
+         raise ValueError("Failed to find or parse Shares Outstanding value from webpage using provided CSS selector.")
 
 except requests.exceptions.RequestException as e:
     print(f"FATAL ERROR: Could not fetch product page URL for scraping: {e}")
     write_status_file(result_file, "ERROR")
     sys.exit(1)
 except ImportError:
-     print("FATAL ERROR: Required libraries for scraping not found (requests, bs4, lxml). Please install them.")
+     # Should have beautifulsoup4 and lxml from requirements
+     print("FATAL ERROR: Required library 'beautifulsoup4' or 'lxml' not found. Please check requirements.txt and installation.")
      write_status_file(result_file, "ERROR")
      sys.exit(1)
 except Exception as e:
@@ -87,7 +91,7 @@ except Exception as e:
 
 
 # --- 2. Attempt to Fetch/Load Holdings Data (URL/Fallback CSV) ---
-# (This section remains unchanged from the previous version)
+# (This section remains unchanged)
 holdings_df = None
 source_used = "Unknown" # Default source status
 
@@ -142,7 +146,7 @@ if holdings_df is None:
 write_status_file(source_file, source_used)
 
 # --- 3. Data Cleaning (Applied to holdings dataframe) ---
-# (Cleaning logic remains the same)
+# (Logic remains the same)
 try:
     print("\nCleaning holdings data...")
     required_cols = ['Ticker', 'Shares', 'Market Currency', 'Asset Class', 'Market Value']
@@ -331,7 +335,7 @@ write_status_file(result_file, final_result_status)
 
 print("\nDisclaimer:")
 print("- This NAV is an ESTIMATE based on fetched prices from yfinance, scraped shares outstanding, and fetched/fallback holdings data.")
-print("- Shares outstanding scraping is FRAGILE and may break if the iShares website changes.")
+print("- Shares outstanding scraping (using CSS selector) is FRAGILE and may break if the iShares website changes.")
 print("- Fund liabilities (fees, etc.) are NOT included.")
 print("- Always refer to the official NAV published by iShares/BlackRock.")
 
