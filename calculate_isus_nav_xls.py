@@ -15,7 +15,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 # --- Configuration ---
 # ** IMPORTANT: Update this filename if you saved the XLSX with a different name **
 holdings_excel_file = 'ISUS_holdings.xlsx' # Input Excel file (.xlsx format)
-holdings_sheet_name = 'holdings' # Sheet name (assuming it's still 'holdings')
+holdings_sheet_name = 'Holdings' # Sheet name (assuming it's still 'holdings')
 header_row_index = 7 # Header starts at row 8 (0-indexed, assuming same as before)
 shares_outstanding_cell_row = 5 # Cell C6 -> row index 5 (assuming same)
 shares_outstanding_cell_col = 2 # Cell C6 -> col index 2 (assuming same)
