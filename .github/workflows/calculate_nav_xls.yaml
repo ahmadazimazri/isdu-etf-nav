@@ -1,0 +1,122 @@
+name: Calculate ISUS NAV Estimate from Excel & Update Pages Data
+
+on:
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+  # Runs on a schedule (adjust cron timing as needed)
+  schedule:
+    # Example: Runs daily at 21:05 UTC (5:05 PM ET, after US market close / 5:05 AM MYT next day)
+    - cron: '05 21 * * *'
+
+# Add permissions for writing to the repository
+permissions:
+  contents: write # Required to commit the nav_data.json file
+
+jobs:
+  calculate-nav:
+    runs-on: ubuntu-latest # Use the latest available Ubuntu runner
+
+    steps:
+      # Step 1: Check out your repository code
+      # This makes your script and the Excel file available
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Python environment
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip' # Enable dependency caching
+
+      # Step 3: Install Python dependencies (including xlrd)
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Check if requirements.txt exists and install from it
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt # Ensure xlrd is in requirements.txt
+          else
+            echo "requirements.txt not found, installing packages individually."
+            pip install pandas yfinance requests xlrd # Added xlrd here
+          fi
+
+      # Step 4: Run the NAV Calculation Script using Excel data
+      # The script now saves its result to nav_result.txt
+      - name: Run NAV Calculation Script (Excel Source)
+        id: nav_calculation
+        continue-on-error: true # Allow workflow to continue to capture status
+        run: python calculate_isus_nav_xls.py # Use the new script name
+
+      # Step 5: Capture NAV Output from File
+      # Reads the status file saved by the previous step
+      - name: Capture NAV Output
+        id: capture_nav_output # Changed ID slightly for clarity
+        run: |
+          # Capture NAV result
+          if [ -f nav_result.txt ]; then
+            nav_value=$(cat nav_result.txt)
+            echo "Read NAV value from file: ${nav_value}"
+            echo "nav_value=${nav_value}" >> $GITHUB_OUTPUT
+          else
+            echo "Warning: nav_result.txt not found."
+            echo "nav_value=ERROR" >> $GITHUB_OUTPUT # Assume error if file missing
+          fi
+
+      # Step 6: Create JSON data file for GitHub Pages
+      # This step creates the file that the HTML page will read
+      - name: Create/Update NAV Data File
+        id: create_json
+        run: |
+          # Create the /docs directory if it doesn't exist
+          mkdir -p docs
+
+          # Get captured values
+          NAV_VALUE="${{ steps.capture_nav_output.outputs.nav_value }}" # Use updated step ID
+          # Data source is now fixed
+          DATA_SOURCE="Excel File (iShares-MSCI-USA-Islamic-UCITS-ETF-USD-Dist_fund.xls)"
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ") # ISO 8601 format UTC
+
+          # Create JSON content
+          echo "{" > docs/nav_data.json
+          echo "  \"navValue\": \"$NAV_VALUE\"," >> docs/nav_data.json
+          echo "  \"dataSource\": \"$DATA_SOURCE\"," >> docs/nav_data.json
+          echo "  \"lastUpdated\": \"$TIMESTAMP\"" >> docs/nav_data.json
+          echo "}" >> docs/nav_data.json
+
+          echo "Created/Updated docs/nav_data.json"
+
+      # Step 7: Commit and push the data file if changed
+      - name: Commit NAV data file
+        run: |
+          git config --global user.name 'GitHub Action Bot'
+          git config --global user.email 'github-actions-bot@users.noreply.github.com'
+          git add docs/nav_data.json
+          # Commit only if there are changes staged
+          git diff --staged --quiet || git commit -m "Update ISUS NAV data file (from Excel)"
+          # Push changes (will fail if no changes were committed)
+          git push || echo "No changes to push."
+
+      # Step 8: Report Status to Job Summary (Optional but helpful)
+      - name: Update Job Summary
+        run: |
+          NAV_VALUE="${{ steps.capture_nav_output.outputs.nav_value }}" # Use updated step ID
+          DATA_SOURCE="Excel File" # Source is now fixed
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          echo "### ISUS NAV Calculation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Timestamp:** ${TIMESTAMP}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Holdings Data Source:** ${DATA_SOURCE}" >> $GITHUB_STEP_SUMMARY
+          if [[ "$NAV_VALUE" == "ERROR" ]]; then
+            echo "- **Status:** Failed to calculate NAV." >> $GITHUB_STEP_SUMMARY
+            echo "- **Result:** ERROR" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "_Check workflow logs for details._" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Status:** Success" >> $GITHUB_STEP_SUMMARY
+            echo "- **Estimated NAV (USD):** **${NAV_VALUE}**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "_Data file 'docs/nav_data.json' updated (if changed)._" >> $GITHUB_STEP_SUMMARY
+          fi
+
