@@ -1,4 +1,4 @@
-name: Calculate ISUS NAV Estimate
+name: Calculate ISUS NAV Estimate & Update Pages Data
 
 on:
   # Allows you to run this workflow manually from the Actions tab
@@ -7,8 +7,11 @@ on:
   # Runs on a schedule (adjust cron timing as needed)
   schedule:
     # Example: Runs daily at 21:05 UTC (5:05 PM ET, after US market close / 5:05 AM MYT next day)
-    # Cron syntax: minute hour day(month) month day(week)
     - cron: '05 21 * * 1-5'
+
+# Add permissions for writing to the repository
+permissions:
+  contents: write # Required to commit the nav_data.json file
 
 jobs:
   calculate-nav:
@@ -36,54 +39,92 @@ jobs:
             pip install -r requirements.txt
           else
             echo "requirements.txt not found, installing packages individually."
-            pip install pandas yfinance requests
+            pip install pandas yfinance requests # Ensure these are listed
           fi
 
       # Step 4: Run the NAV Calculation Script
-      # The script now saves its result to nav_result.txt
+      # Assumes script is named calculate_isus_nav_online_fallback.py
+      # It saves results to nav_result.txt and source_used.txt
       - name: Run NAV Calculation Script
         id: nav_calculation
+        continue-on-error: true # Allow workflow to continue to capture status files
         run: python calculate_isus_nav_online_fallback.py
 
-      # Step 5: Capture NAV Output from File
-      # Reads the result saved by the previous step
-      - name: Capture NAV Output from File
-        id: capture_nav
+      # Step 5: Capture NAV Output and Source from Files
+      # Reads the status files saved by the previous step
+      - name: Capture NAV Output and Source
+        id: capture_outputs
         run: |
+          # Capture NAV result
           if [ -f nav_result.txt ]; then
             nav_value=$(cat nav_result.txt)
             echo "Read NAV value from file: ${nav_value}"
-            # Check if the script wrote an error indicator
-            if [[ "$nav_value" == "ERROR" ]]; then
-               echo "NAV calculation script indicated an error."
-               # Optionally fail the workflow here if needed: exit 1
-               echo "nav_value=" >> $GITHUB_OUTPUT # Set empty output
-            else
-               echo "nav_value=${nav_value}" >> $GITHUB_OUTPUT
-            fi
+            echo "nav_value=${nav_value}" >> $GITHUB_OUTPUT
           else
             echo "Warning: nav_result.txt not found."
-            echo "nav_value=" >> $GITHUB_OUTPUT # Set empty output
+            echo "nav_value=ERROR" >> $GITHUB_OUTPUT # Assume error if file missing
           fi
 
-      # Step 6: Add NAV to Job Summary (if successful)
-      # This step writes Markdown content to the Job Summary page
-      - name: Add NAV to Job Summary
-        # Run only if the previous step successfully captured a non-error value
-        if: steps.capture_nav.outputs.nav_value != '' && steps.capture_nav.outputs.nav_value != 'ERROR'
-        run: |
-          echo "### Estimated ISUS NAV (USD)" >> $GITHUB_STEP_SUMMARY
-          echo "**${{ steps.capture_nav.outputs.nav_value }}**" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY # Add a blank line
-          echo "_Note: This is an estimate based on fetched prices as of workflow execution time and may differ from the official NAV._" >> $GITHUB_STEP_SUMMARY
+          # Capture Data Source
+          if [ -f source_used.txt ]; then
+            data_source=$(cat source_used.txt)
+            echo "Read data source from file: ${data_source}"
+            echo "data_source=${data_source}" >> $GITHUB_OUTPUT
+          else
+            echo "Warning: source_used.txt not found."
+            echo "data_source=Unknown" >> $GITHUB_OUTPUT # Default if file missing
+          fi
 
-      # Step 7: Report NAV Error in Job Summary (if failed)
-      - name: Report NAV Error in Job Summary
-        # Run only if the previous step resulted in an empty or ERROR value
-        if: steps.capture_nav.outputs.nav_value == '' || steps.capture_nav.outputs.nav_value == 'ERROR'
+      # Step 6: Create JSON data file for GitHub Pages
+      # This step creates the file that the HTML page will read
+      - name: Create/Update NAV Data File
+        id: create_json
         run: |
-          echo "### Estimated ISUS NAV (USD)" >> $GITHUB_STEP_SUMMARY
-          echo "**Could not be determined.**" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "_Check workflow logs for details._" >> $GITHUB_STEP_SUMMARY
+          mkdir -p docs # Ensure /docs directory exists
+          NAV_VALUE="${{ steps.capture_outputs.outputs.nav_value }}"
+          DATA_SOURCE="${{ steps.capture_outputs.outputs.data_source }}"
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ") # ISO 8601 format UTC
+
+          echo "{" > docs/nav_data.json
+          echo "  \"navValue\": \"$NAV_VALUE\"," >> docs/nav_data.json
+          # Using fixed source description now, as scraping was removed
+          echo "  \"sharesOutstandingSource\": \"Hardcoded in Script\"," >> docs/nav_data.json
+          echo "  \"holdingsDataSource\": \"$DATA_SOURCE\"," >> docs/nav_data.json
+          echo "  \"lastUpdated\": \"$TIMESTAMP\"" >> docs/nav_data.json
+          echo "}" >> docs/nav_data.json
+          echo "Created/Updated docs/nav_data.json"
+
+      # Step 7: Commit and push the data file if changed
+      - name: Commit NAV data file
+        run: |
+          git config --global user.name 'GitHub Action Bot'
+          git config --global user.email 'github-actions-bot@users.noreply.github.com'
+          git add docs/nav_data.json
+          # Commit only if there are changes staged
+          git diff --staged --quiet || git commit -m "Update ISUS NAV data file"
+          # Push changes (will fail if no changes were committed)
+          git push || echo "No changes to push."
+
+      # Step 8: Report Status to Job Summary
+      - name: Update Job Summary
+        run: |
+          NAV_VALUE="${{ steps.capture_outputs.outputs.nav_value }}"
+          DATA_SOURCE="${{ steps.capture_outputs.outputs.data_source }}" # Holdings source
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          echo "### ISUS NAV Calculation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Timestamp:** ${TIMESTAMP}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Holdings Data Source:** ${DATA_SOURCE}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Shares Outstanding Source:** Hardcoded in Script" >> $GITHUB_STEP_SUMMARY
+          if [[ "$NAV_VALUE" == "ERROR" ]]; then
+            echo "- **Status:** Failed to calculate NAV." >> $GITHUB_STEP_SUMMARY
+            echo "- **Result:** ERROR" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "_Check workflow logs for details._" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Status:** Success" >> $GITHUB_STEP_SUMMARY
+            echo "- **Estimated NAV (USD):** **${NAV_VALUE}**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "_Data file 'docs/nav_data.json' updated (if changed)._" >> $GITHUB_STEP_SUMMARY
+          fi
 
