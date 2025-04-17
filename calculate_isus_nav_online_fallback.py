@@ -6,6 +6,7 @@ import time
 import datetime
 import warnings
 import os # For checking fallback file existence
+import sys # To exit script
 
 # Suppress specific FutureWarning from yfinance/pandas if needed
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
@@ -14,15 +15,25 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 holdings_url = "https://www.ishares.com/uk/individual/en/products/251393/ishares-msci-usa-islamic-ucits-etf/1506575576011.ajax?fileType=csv&fileName=ISUS_holdings&dataType=fund"
 fallback_holdings_file = 'ISUS_holdings.csv' # Local fallback file name
 result_file = "nav_result.txt" # File to save the final NAV result
+source_file = "source_used.txt" # File to save the data source used
 
 # !! IMPORTANT !!: Update with the LATEST shares outstanding for ISUS
 # Find this on the iShares website or reliable financial data source.
-# Using a placeholder - VERIFY THIS VALUE.
+# Using value user provided in reverted code - VERIFY THIS VALUE.
 total_isus_shares_outstanding = 3110000
+
+# Function to write to a status file, handling potential errors
+def write_status_file(filename, content):
+    try:
+        with open(filename, "w") as f:
+            f.write(str(content))
+        # print(f"Status written to {filename}: {content}") # Optional debug
+    except IOError as e:
+        print(f"Warning: Could not write status to file '{filename}': {e}")
 
 # --- 1. Attempt to Fetch/Load Holdings Data ---
 holdings_df = None
-source_used = None # To track if URL or fallback was used
+source_used = "Unknown" # Default source status
 
 # Try fetching from URL first
 try:
@@ -49,7 +60,7 @@ try:
         csv_data_string = "\n".join(lines[2:])
         # Read the processed string data using pandas
         holdings_df = pd.read_csv(io.StringIO(csv_data_string))
-        source_used = "URL"
+        source_used = "URL" # Set source
         print("Parsed holdings data from URL.")
     else:
         print("Warning: Downloaded CSV from URL has fewer than 3 lines. Will try fallback.")
@@ -68,16 +79,21 @@ if holdings_df is None:
     if os.path.exists(fallback_holdings_file):
         try:
             holdings_df = pd.read_csv(fallback_holdings_file)
-            # **Important**: Assume local file *doesn't* need first 2 lines removed
-            # If your local file *also* has extra header lines, add processing here.
-            source_used = "Local File"
+            source_used = "Local File" # Set source
             print(f"Successfully loaded holdings from {fallback_holdings_file}.")
         except Exception as e:
             print(f"FATAL ERROR: Failed to read fallback file '{fallback_holdings_file}': {e}")
-            exit(1) # Exit with non-zero code on fatal error
+            write_status_file(source_file, "Error") # Write error status for source
+            write_status_file(result_file, "ERROR")
+            sys.exit(1) # Exit with non-zero code on fatal error
     else:
         print(f"FATAL ERROR: Fallback file '{fallback_holdings_file}' not found and URL fetch failed.")
-        exit(1) # Exit with non-zero code on fatal error
+        write_status_file(source_file, "Error") # Write error status for source
+        write_status_file(result_file, "ERROR")
+        sys.exit(1) # Exit with non-zero code on fatal error
+
+# Write the determined source to the status file
+write_status_file(source_file, source_used)
 
 # --- 2. Data Cleaning (Applied to whichever source was successful) ---
 try:
@@ -102,7 +118,8 @@ try:
 
 except Exception as e:
     print(f"FATAL ERROR during data cleaning (source: {source_used}): {e}")
-    exit(1)
+    write_status_file(result_file, "ERROR")
+    sys.exit(1)
 
 
 # --- 3. Identify Top 10 Equity Holdings ---
@@ -111,11 +128,11 @@ try:
     # Ensure Market Value is numeric before sorting
     holdings_df['Market Value'] = pd.to_numeric(holdings_df['Market Value'], errors='coerce')
     equities_df = holdings_df[holdings_df['Asset Class'] == 'Equity'].copy()
-    if not equities_df.empty:
+    if not equities_df.empty and not equities_df['Market Value'].isnull().all():
          top_10_equities = equities_df.nlargest(10, 'Market Value')['Ticker'].tolist()
          print(f"\nIdentified Top 10 Holdings (by initial Market Value): {top_10_equities}")
     else:
-        print("Warning: No equity holdings found to determine top 10.")
+        print("Warning: No equity holdings with valid Market Value found to determine top 10.")
 except Exception as e:
     print(f"Warning: Could not determine top 10 holdings due to data issue: {e}")
 
@@ -166,10 +183,14 @@ else:
 
 
 for index, row in holdings_df.iterrows():
-    ticker = row['Ticker']
-    shares = row['Shares']
-    currency = row['Market Currency']
-    asset_class = row['Asset Class']
+    ticker = row.get('Ticker', 'N/A') # Use .get for safety if column missing
+    shares = row.get('Shares')
+    currency = row.get('Market Currency', 'N/A')
+    asset_class = row.get('Asset Class', 'N/A')
+
+    # Skip if essential data missing after cleaning
+    if pd.isna(shares) or ticker == 'N/A' or currency == 'N/A' or asset_class == 'N/A':
+        continue
 
     current_price_usd = None
     holding_value_usd = 0
@@ -180,9 +201,13 @@ for index, row in holdings_df.iterrows():
              print(f"  Processing other holdings... ({processed_count+1}/{len(holdings_df)})")
 
         try:
+            # Skip fetching if ticker looks invalid
+            if not isinstance(ticker, str) or len(ticker) > 10 or ' ' in ticker:
+                 print(f"  Skipping invalid ticker: {ticker}")
+                 continue
+
             stock_ticker = yf.Ticker(ticker)
             info = stock_ticker.info
-            # Prefer more 'live' prices if available
             current_price_usd = info.get('currentPrice') or info.get('regularMarketPrice')
 
             if current_price_usd is None: # Fallback to previous close
@@ -196,19 +221,23 @@ for index, row in holdings_df.iterrows():
                 if print_details:
                      print(f"  -> {ticker}: Shares: {shares:,.2f}, Price: {current_price_usd:.2f} USD, Value: {holding_value_usd:,.2f} USD")
             else:
-                missing_prices.append(ticker)
+                missing_prices.append(str(ticker)) # Convert potential non-strings
                 if print_details:
                      print(f"  -> Warning: Could not retrieve price for {ticker}")
 
             time.sleep(0.2) # Pause briefly
 
         except Exception as e:
-            missing_prices.append(ticker)
+            missing_prices.append(str(ticker)) # Convert potential non-strings
             if print_details:
                 print(f"  -> Error fetching price for {ticker}: {e}")
 
     elif asset_class == 'Cash':
-        cash_amount = row['Market Value'] # Using Market Value col for cash amount
+        cash_amount = row.get('Market Value') # Using Market Value col for cash amount
+        if pd.isna(cash_amount):
+             print(f"  Warning: Missing 'Market Value' for Cash row with currency {currency}. Skipping.")
+             continue
+
         print(f"  Processing Cash: {cash_amount:,.2f} {currency}")
         if currency == 'USD':
             holding_value_usd = cash_amount
@@ -239,41 +268,39 @@ for index, row in holdings_df.iterrows():
 # --- 6. Estimate NAV & Save Result ---
 calculation_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S %Z')
 print(f"\n--- NAV Calculation Summary ({calculation_time}) ---")
-print(f"Holdings Data Source: {source_used}") # Indicate source used
+print(f"Holdings Data Source Used: {source_used}") # Indicate source used
 
 estimated_nav_per_share_usd = None # Initialize variable
+final_result_status = "ERROR" # Default status for result file
 
 if missing_prices:
     unique_missing = sorted(list(set(missing_prices)))
     print(f"Warning: Could not determine current value for some holdings: {', '.join(unique_missing)}")
+    # Keep final_result_status as "ERROR" if prices are missing
 
 if total_isus_shares_outstanding > 0:
     estimated_nav_per_share_usd = total_portfolio_value_usd / total_isus_shares_outstanding
-    print(f"Total Shares Outstanding used: {total_isus_shares_outstanding:,}")
+    print(f"Total Shares Outstanding used (hardcoded): {total_isus_shares_outstanding:,}")
     # --- FINAL RESULT ---
     print(f"\nEstimated NAV per Share (USD): {estimated_nav_per_share_usd:.4f}\n")
+    # Set status to the calculated value only if prices weren't missing
+    if not missing_prices:
+         final_result_status = f"{estimated_nav_per_share_usd:.4f}"
 else:
     print("\nError: Total shares outstanding is zero or invalid. Cannot calculate NAV per share.\n")
+    # Keep final_result_status as "ERROR"
 
 # --- Save result to file ---
-try:
-    with open(result_file, "w") as f:
-        if estimated_nav_per_share_usd is not None:
-            f.write(f"{estimated_nav_per_share_usd:.4f}")
-        else:
-            f.write("ERROR") # Write error indicator if NAV couldn't be calculated
-    print(f"Calculation result saved to {result_file}")
-except IOError as e:
-    print(f"Warning: Could not write NAV result to file '{result_file}': {e}")
+write_status_file(result_file, final_result_status)
 
 
 print("\nDisclaimer:")
 print("- This NAV is an ESTIMATE based on fetched prices (possibly delayed/closing) from yfinance and specified shares outstanding.")
 print("- Holdings data attempted from iShares URL, with local file fallback.")
 print("- Fund liabilities (fees, etc.) are NOT included in this calculation.")
-print("- Always refer to the official NAV published by iShares/BlackRock for definitive values.")
+print("- Always refer to the official NAV published by iShares/BlackRock.")
 
-# Optional: Exit with non-zero code if prices were missing, useful for CI/CD
-if missing_prices:
-    print("\nExiting with status code 1 due to missing price data.")
-    exit(1)
+# Optional: Exit with non-zero code if errors occurred
+if final_result_status == "ERROR":
+    print("\nExiting with status code 1 due to calculation errors or missing data.")
+    sys.exit(1)
