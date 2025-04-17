@@ -1,5 +1,6 @@
 {
-  "navValue": "ERROR",
-  "dataSource": "Excel File (iShares-MSCI-USA-Islamic-UCITS-ETF-USD-Dist_fund.xls)",
-  "lastUpdated": "2025-04-16T16:37:47Z"
+  "navValue": "63.9260",
+  "sharesOutstandingSource": "Hardcoded in Script",
+  "holdingsDataSource": "URL",
+  "lastUpdated": "2025-04-17T10:41:09Z"
 }
