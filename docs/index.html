@@ -107,9 +107,19 @@
 
                 // Format timestamp for display
                 if (data.lastUpdated) {
-                    const date = new Date(data.lastUpdated);
-                    // Adjust formatting for GMT+8
-                    updatedElement.textContent = `Last Updated (GMT+8): ${date.toLocaleString('en-GB', { timeZone: 'Asia/Kuala_Lumpur', dateStyle: 'medium', timeStyle: 'medium' })}`;
+                    // Assuming data.lastUpdated is a string like "2024-05-09T10:00:00" and IS GMT/UTC.
+                    // Ensure the string is treated as UTC by appending 'Z' if it's not already present.
+                    const dateString = String(data.lastUpdated); // Ensure it's a string
+                    const dateStringAsUTC = dateString.endsWith("Z") ? dateString : dateString + "Z";
+                    const date = new Date(dateStringAsUTC);
+                
+                    // Now 'date' object correctly represents the specific moment in UTC.
+                    // Convert this UTC moment to GMT+8 (Asia/Kuala_Lumpur) for display.
+                    updatedElement.textContent = `Last Updated (GMT+8): ${date.toLocaleString('en-GB', {
+                        timeZone: 'Asia/Kuala_Lumpur',
+                        dateStyle: 'medium',
+                        timeStyle: 'medium'
+                    })}`;
                 } else {
                     updatedElement.textContent = 'Last Updated: Unknown';
                 }
