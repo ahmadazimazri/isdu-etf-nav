@@ -108,8 +108,8 @@
                 // Format timestamp for display
                 if (data.lastUpdated) {
                     const date = new Date(data.lastUpdated);
-                    // Adjust formatting as desired
-                    updatedElement.textContent = `Last Updated (UTC): ${date.toLocaleString('en-GB', { timeZone: 'UTC', dateStyle: 'medium', timeStyle: 'medium' })}`;
+                    // Adjust formatting for GMT+8
+                    updatedElement.textContent = `Last Updated (GMT+8): ${date.toLocaleString('en-GB', { timeZone: 'Asia/Kuala_Lumpur', dateStyle: 'medium', timeStyle: 'medium' })}`;
                 } else {
                     updatedElement.textContent = 'Last Updated: Unknown';
                 }
