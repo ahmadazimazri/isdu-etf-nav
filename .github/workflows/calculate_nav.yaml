@@ -85,7 +85,7 @@ jobs:
           NAV_VALUE="${{ steps.capture_outputs.outputs.nav_value }}"
           DATA_SOURCE="${{ steps.capture_outputs.outputs.data_source }}"
           # TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ") # ISO 8601 format UTC
-          TIMESTAMP=$(TZ="Asia/Kuala_Lumpur" date +"%Y-%m-%dT%H:%M:%SZ")
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
           echo "{" > docs/nav_data.json
           echo "  \"navValue\": \"$NAV_VALUE\"," >> docs/nav_data.json
