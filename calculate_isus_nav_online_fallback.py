@@ -20,7 +20,7 @@ source_file = "source_used.txt" # File to save the data source used
 # !! IMPORTANT !!: Update with the LATEST shares outstanding for ISUS
 # Find this on the iShares website or reliable financial data source.
 # Using value user provided in reverted code - VERIFY THIS VALUE.
-total_isus_shares_outstanding = 3310000
+total_isus_shares_outstanding = 3410000
 
 # Function to write to a status file, handling potential errors
 def write_status_file(filename, content):
