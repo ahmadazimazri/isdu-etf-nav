@@ -8,6 +8,12 @@ import warnings
 import os # For checking fallback file existence
 import sys # To exit script
 
+# --- yfinance Workaround ---
+# Set a custom user-agent for yfinance requests to avoid 403 errors.
+# yfinance now requires this to comply with Yahoo Finance's terms of service.
+session = requests.Session()
+session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+
 # Suppress specific FutureWarning from yfinance/pandas if needed
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 
@@ -143,7 +149,7 @@ current_eur_usd_rate = None
 current_gbp_usd_rate = None
 try:
     # Fetch EUR to USD rate
-    eur_usd_ticker = yf.Ticker("EURUSD=X")
+    eur_usd_ticker = yf.Ticker("EURUSD=X", session=session)
     eur_usd_info = eur_usd_ticker.history(period="1d")
     if not eur_usd_info.empty:
         current_eur_usd_rate = eur_usd_info['Close'].iloc[-1]
@@ -153,7 +159,7 @@ try:
     time.sleep(0.2) # Small delay
 
     # Fetch GBP to USD rate
-    gbp_usd_ticker = yf.Ticker("GBPUSD=X")
+    gbp_usd_ticker = yf.Ticker("GBPUSD=X", session=session)
     gbp_usd_info = gbp_usd_ticker.history(period="1d")
     if not gbp_usd_info.empty:
         current_gbp_usd_rate = gbp_usd_info['Close'].iloc[-1]
@@ -206,7 +212,7 @@ for index, row in holdings_df.iterrows():
                  print(f"  Skipping invalid ticker: {ticker}")
                  continue
 
-            stock_ticker = yf.Ticker(ticker)
+            stock_ticker = yf.Ticker(ticker, session=session)
             info = stock_ticker.info
             current_price_usd = info.get('currentPrice') or info.get('regularMarketPrice')
 
